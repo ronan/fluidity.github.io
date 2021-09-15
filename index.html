@@ -1,29 +1,33 @@
 <html>
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="keywords" content="">
-<meta name="description" content="">
-<meta name="author" content="">
-<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Work+Sans&display=swap');
-  body {
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="keywords" content="">
+  <meta name="description" content="">
+  <meta name="author" content="">
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/glsl-solid-wireframe@1.0.1/index.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Work+Sans&display=swap');
+
+    body {
       background: #333;
       color: #eee;
       display: grid;
       place-content: center;
       font-family: 'Work Sans', sans-serif;
       margin: 0;
-  }
-  .sketch-container {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: -1;
-  }
+    }
+
+    .sketch-container {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: -1;
+    }
   </style>
 </head>
 
@@ -37,29 +41,32 @@
     // All of this was shamelessly stolen from: https://webgl-shaders.com/mountains-example.html
 
     #define GLSLIFY 1
+
     // Common uniforms
     uniform vec2 u_resolution;
-    uniform vec2 u_mouse;
     uniform float u_time;
     uniform float u_frame;
     
     // Common varyings
     varying vec3 v_position;
+    varying vec2 v_barycentric;
+    varying vec2 v_grid;
+    varying vec3 v_edge_dist;
     varying vec3 v_normal;
     
     /*
-     * GLSL textureless classic 2D noise "cnoise",
-     * with an RSL-style periodic variant "pnoise".
-     * Author:  Stefan Gustavson (stefan.gustavson@liu.se)
-     * Version: 2011-08-22
-     *
-     * Many thanks to Ian McEwan of Ashima Arts for the
-     * ideas for permutation and gradient selection.
-     *
-     * Copyright (c) 2011 Stefan Gustavson. All rights reserved.
-     * Distributed under the MIT license. See LICENSE file.
-     * https://github.com/stegu/webgl-noise
-     */
+    * GLSL textureless classic 2D noise "cnoise",
+    * with an RSL-style periodic variant "pnoise".
+    * Author:  Stefan Gustavson (stefan.gustavson@liu.se)
+    * Version: 2011-08-22
+    *
+    * Many thanks to Ian McEwan of Ashima Arts for the
+    * ideas for permutation and gradient selection.
+    *
+    * Copyright (c) 2011 Stefan Gustavson. All rights reserved.
+    * Distributed under the MIT license. See LICENSE file.
+    * https://github.com/stegu/webgl-noise
+    */
     
     vec4 mod289(vec4 x) {
         return x - floor(x * (1.0 / 289.0)) * 289.0;
@@ -119,263 +126,278 @@
     uniform float u_tileSize;
     uniform float u_speed;
     uniform float u_maxHeight;
-    
-    // Varying containing the terrain elevation
-    varying float v_elevation;
+
+    attribute vec2 a_barycentric;
     
     // Calculates the vertex displaced position
-    vec3 getDisplacedPosition(vec3 position) {
+    vec3 getDisplacedPosition(vec3 position, float t) {
       // Calculate the total flying distance
-      float distance = u_speed * u_time;
+      float distance = t;
     
       // Calculate the vertex horizontal shift
       float h_shift = mod(distance, u_tileSize);
     
       // Calculate the vertex vertical shift
-      float v_shift = u_maxHeight * cnoise(0.4 * floor(vec2(position.x, position.z - distance) / u_tileSize));
-    
-      // Flatten the bottom to simulate the lakes
-      v_shift = max(-0.8 * u_maxHeight, v_shift);
-    
-      return position + vec3(0.0, v_shift, h_shift);
+      float v_shift = u_maxHeight * cnoise(0.3 * floor(vec2(position.x, position.z - distance) / u_tileSize));
+
+      return position + vec3(u_tileSize, v_shift, h_shift);
     }
     
     /*
-     * The main program
-     */
+    * The main program
+    */
     void main() {
       // Calculate the new vertex position
-      vec3 new_position = getDisplacedPosition(position);
-    
+      float t = u_speed * u_time;
+      vec3 new_position = getDisplacedPosition(position, t);
+
+      // Save the varyings
+      v_grid = position.xz * 0.5;
+      v_position = new_position.xyz;
+
       // Calculate the modelview position
       vec4 mv_position = modelViewMatrix * vec4(new_position, 1.0);
-    
-      // Save the varyings
-      v_position = mv_position.xyz;
-      v_elevation = 0.5 * (u_maxHeight + new_position.y);
     
       // Vertex shader output
       gl_Position = projectionMatrix * mv_position;
     }
     
-        </script>
-        <script type="x-shader/x-fragment" id="fragmentShader">
-          #define GLSLIFY 1
-          // Common uniforms
-          uniform vec2 u_resolution;
-          uniform vec2 u_mouse;
-          uniform float u_time;
-          uniform float u_frame;
+  </script>
+  <script type="x-shader/x-fragment" id="fragmentShader">
+    #define GLSLIFY 1
+
+    // Common uniforms
+    uniform vec2 u_resolution;
+    uniform float u_time;
+    uniform float u_frame;
+
+    // Common varyings
+    varying vec3 v_position;
+    varying vec2 v_grid;
+    varying vec2 v_barycentric;
+    varying vec3 v_normal;
+
+   /*
+    *  Calculates the normal vector at the given position
+    *
+    *  Uses this fix for some mobiles:
+    *  https://stackoverflow.com/questions/20272272/standard-derivatives-from-fragment-shader-dfdx-dfdy-dont-run-correctly-in-a
+    */
+    vec3 calculateNormal(vec3 position) {
+        vec3 fdx = vec3(dFdx(position.x), dFdx(position.y), dFdx(position.z));
+        vec3 fdy = vec3(dFdy(position.x), dFdy(position.y), dFdy(position.z));
+        vec3 normal = normalize(cross(fdx, fdy));
+
+        if (!gl_FrontFacing) {
+            normal = -normal;
+        }
+
+        return normal;
+    }
+
+    /*
+    *  Calculates the diffuse factor produced by the light illumination
+    */
+    float diffuseFactor(vec3 normal, vec3 light_direction) {
+        float df = dot(normalize(normal), normalize(light_direction));
+
+        if (gl_FrontFacing) {
+            df = -df;
+        }
+
+        return max(0.0, df);
+    }
+
+    // The plane tile size, the maximum mountain height and the sky color
+    uniform float u_tileSize;
+    uniform float u_maxHeight;
+    uniform vec3 u_skyColor;
+ 
+    float cart_grid (vec2 parameter, float width, float feather) {
+      float w1 = width - feather * 0.5;
+      vec2 d = fwidth(parameter);
+      vec2 looped = 0.5 - abs(mod(parameter, 1.0) - 0.5);
+      vec2 a2 = smoothstep(d * w1, d * (w1 + feather), looped);
+      return min(a2.x, a2.y);
+    }
+
+
+    vec3 hsv2rgb(vec3 c)
+    {
+        vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+        vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+        return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
     
-          // Common varyings
-          varying vec3 v_position;
-          varying vec3 v_normal;
-    
-          /*
-          *  Calculates the normal vector at the given position
-          *
-          *  Uses this fix for some mobiles:
-          *  https://stackoverflow.com/questions/20272272/standard-derivatives-from-fragment-shader-dfdx-dfdy-dont-run-correctly-in-a
-          */
-          vec3 calculateNormal(vec3 position) {
-              vec3 fdx = vec3(dFdx(position.x), dFdx(position.y), dFdx(position.z));
-              vec3 fdy = vec3(dFdy(position.x), dFdy(position.y), dFdy(position.z));
-              vec3 normal = normalize(cross(fdx, fdy));
-    
-              if (!gl_FrontFacing) {
-                  normal = -normal;
-              }
-    
-              return normal;
+    void main() {
+      vec2 uv = ( gl_FragCoord.xy / u_resolution.xy );
+
+      vec3 surface_color = vec3(0.5);
+      surface_color = hsv2rgb(vec3 ( 0.3 + u_time / 50., 0.3, 0.1));
+      
+      float wave = 1.0;//min(100., abs(1. / (sin(uv.x - 0.5 + sin(uv.y+3.+u_time))) * 9.));
+      vec3 grid_color = surface_color;
+      vec3 grid_highlight = grid_color * wave * 0.3;
+      grid_color = mix(grid_color, grid_highlight, 0.1) * 0.5;
+      
+      float grid_w = v_position.z/40.0;
+      
+      float grid = (1.0 - cart_grid(v_grid, grid_w, 1.0));
+      float glow = (1.0 - cart_grid(v_grid, grid_w, 20.));
+      
+      surface_color += grid * grid_color * 8. + glow * grid_color * 0.9;
+      
+      vec3 new_normal = calculateNormal(v_position);
+      vec3 light_direction = -vec3(0.25, 0.25, 0.25);
+      surface_color *= diffuseFactor(new_normal, light_direction);
+
+      float fog_factor = clamp(0.0, 1.0, -v_position.z / (15.0 * u_tileSize));
+      surface_color = mix(surface_color, u_skyColor, fog_factor);
+
+      gl_FragColor = vec4(surface_color, 1.0);
+    }
+
+  </script>
+
+  <script>
+    window.onload = function () {
+      runSketch();
+    };
+
+    function runSketch() {
+      var renderer, scene, camera, clock, stats, skyColor, uniforms;
+
+      init();
+      animate();
+
+      /*
+      * Initializes the sketch
+      */
+      function init() {
+        // Initialize the WebGL renderer
+        renderer = new THREE.WebGLRenderer({
+          antialias: true
+        });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        // Add the renderer to the sketch container
+        var container = document.getElementById("sketch-container");
+        container.appendChild(renderer.domElement);
+
+        // Initialize the scene
+        scene = new THREE.Scene();
+
+        // Initialize the camera
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+        camera.position.z = 30;
+
+        // Initialize the clock
+        clock = new THREE.Clock(true);
+
+        // Set the sky color
+        skyColor = new THREE.Color(0.1, 0.1, 0.1);
+        renderer.setClearColor(skyColor);
+
+        // Create the plane geometry
+        var planeSize = 320;
+        var planeSegments = 32;
+        var geometry = new THREE.PlaneGeometry(planeSize, planeSize, planeSegments, planeSegments);
+        geometry.rotateX(-Math.PI / 2);
+
+        // Define the shader uniforms
+        uniforms = {
+          u_time: {
+            type: "f",
+            value: 0.0
+          },
+          u_frame: {
+            type: "f",
+            value: 0.0
+          },
+          u_resolution: {
+            type: "v2",
+            value: new THREE.Vector2(window.innerWidth, window.innerHeight)
+              .multiplyScalar(window.devicePixelRatio)
+          },
+          u_tileSize: {
+            type: "f",
+            value: planeSize / planeSegments
+          },
+          u_speed: {
+            type: "f",
+            value: 40.0
+          },
+          u_maxHeight: {
+            type: "f",
+            value: 10.0
+          },
+          u_skyColor: {
+            type: "v3",
+            value: skyColor
           }
-    
-          /*
-          *  Calculates the diffuse factor produced by the light illumination
-          */
-          float diffuseFactor(vec3 normal, vec3 light_direction) {
-              float df = dot(normalize(normal), normalize(light_direction));
-    
-              if (gl_FrontFacing) {
-                  df = -df;
-              }
-    
-              return max(0.0, df);
-          }
-    
-          // The plane tile size, the maximum mountain height and the sky color
-          uniform float u_tileSize;
-          uniform float u_maxHeight;
-          uniform vec3 u_skyColor;
-    
-          // Varying containing the terrain elevation
-          varying float v_elevation;
-    
-          /*
-          * The main program
-          */
-          void main() {
-            // Calculate the new normal vector
-            vec3 new_normal = calculateNormal(v_position);
-    
-            // Use the mouse position to define the light direction
-            float min_resolution = min(u_resolution.x, u_resolution.y);
-            vec3 light_direction = -vec3((u_mouse - 0.5 * u_resolution) / min_resolution, 0.25);
-    
-            // Set the default surface color
-            vec3 surface_color = vec3(0.2, 0.2, 0.2);
-    
-            // Apply the light diffusion factor
-            surface_color *= diffuseFactor(new_normal, light_direction);
-    
-            // Add a fog effect
-            float fog_factor = clamp(0.0, 1.0, -(0.9) * v_position.z / (15.0 * u_tileSize));
-            surface_color = mix(surface_color, u_skyColor, fog_factor);
-    
-            // Fragment shader output
-            gl_FragColor = vec4(surface_color, 1.0);
-          }
-    
-        </script>
-    
-        <script>
-        window.onload = function() {
-          runSketch();
         };
-    
-          function runSketch() {
-            var renderer, scene, camera, clock, stats, skyColor, uniforms;
-    
-            init();
-            animate();
-    
-            /*
-            * Initializes the sketch
-            */
-            function init() {
-              // Initialize the WebGL renderer
-              renderer = new THREE.WebGLRenderer({
-                antialias : true
-              });
-              renderer.setPixelRatio(window.devicePixelRatio);
-              renderer.setSize(window.innerWidth, window.innerHeight);
-    
-              // Add the renderer to the sketch container
-              var container = document.getElementById("sketch-container");
-              container.appendChild(renderer.domElement);
-    
-              // Initialize the scene
-              scene = new THREE.Scene();
-    
-              // Initialize the camera
-              camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
-              camera.position.z = 30;
-    
-              // Initialize the clock
-              clock = new THREE.Clock(true);
-    
-              // Set the sky color
-              skyColor = new THREE.Color(0.1, 0.1, 0.1);
-              renderer.setClearColor(skyColor);
-    
-              // Create the plane geometry
-              var planeSize = 320;
-              var planeSegments = 32;
-              var geometry = new THREE.PlaneGeometry(planeSize, planeSize, planeSegments, planeSegments);
-              geometry.rotateX(-Math.PI / 2);
-    
-              // Define the shader uniforms
-              uniforms = {
-                u_time : {
-                  type : "f",
-                  value : 0.0
-                },
-                u_frame : {
-                  type : "f",
-                  value : 0.0
-                },
-                u_resolution : {
-                  type : "v2",
-                  value : new THREE.Vector2(window.innerWidth, window.innerHeight)
-                      .multiplyScalar(window.devicePixelRatio)
-                },
-                u_mouse : {
-                  type : "v2",
-                  value : new THREE.Vector2(0.7 * window.innerWidth, window.innerHeight)
-                      .multiplyScalar(window.devicePixelRatio)
-                },
-                u_tileSize : {
-                  type : "f",
-                  value : planeSize / planeSegments
-                },
-                u_speed : {
-                  type : "f",
-                  value : 30.0
-                },
-                u_maxHeight : {
-                  type : "f",
-                  value : 20.0
-                },
-                u_skyColor : {
-                  type : "v3",
-                  value : skyColor
-                }
-              };
-    
-              // Create the shader material
-              var material = new THREE.ShaderMaterial({
-                uniforms : uniforms,
-                vertexShader : document.getElementById("vertexShader").textContent,
-                fragmentShader : document.getElementById("fragmentShader").textContent,
-                side : THREE.FrontSide,
-                transparent : true,
-                extensions : {
-                  derivatives : true
-                }
-              });
-    
-              // Create the mesh and add it to the scene
-              var mesh = new THREE.Mesh(geometry, material);
-              mesh.rotateX(Math.PI / 9);
-              scene.add(mesh);
-    
-              // Add the event listeners
-              window.addEventListener("resize", onWindowResize, false);
-            }
-    
-            /*
-            * Animates the sketch
-            */
-            function animate() {
-              requestAnimationFrame(animate);
-              render();
-              stats.update();
-            }
-    
-            /*
-            * Renders the sketch
-            */
-            function render() {
-              uniforms.u_time.value = clock.getElapsedTime();
-              uniforms.u_frame.value += 1.0;
-              renderer.render(scene, camera);
-            }
-    
-            /*
-            * Updates the renderer size, the camera aspect ratio and the uniforms when the window is resized
-            */
-            function onWindowResize(event) {
-              // Update the renderer
-              renderer.setSize(window.innerWidth, window.innerHeight);
-    
-              // Update the camera
-              camera.aspect = window.innerWidth / window.innerHeight;
-              camera.updateProjectionMatrix();
-    
-              // Update the resolution uniform
-              uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight).multiplyScalar(window.devicePixelRatio);
-            }
+
+        attributes = {
+        };
+
+        // Create the shader material
+        var material = new THREE.ShaderMaterial({
+          uniforms: uniforms,
+          attributes: attributes,
+          vertexShader: document.getElementById("vertexShader").textContent,
+          fragmentShader: document.getElementById("fragmentShader").textContent,
+          side: THREE.FrontSide,
+          transparent: true,
+          extensions: {
+            derivatives: true
           }
-        </script>
+        });
+
+        // Create the mesh and add it to the scene
+        var mesh = new THREE.Mesh(geometry, material);
+        mesh.rotateX(Math.PI / 9);
+        scene.add(mesh);
+
+        // Add the event listeners
+        window.addEventListener("resize", onWindowResize, false);
+      }
+
+      /*
+      * Animates the sketch
+      */
+      function animate() {
+        requestAnimationFrame(animate);
+        render();
+        stats.update();
+      }
+
+      /*
+      * Renders the sketch
+      */
+      function render() {
+        uniforms.u_time.value = clock.getElapsedTime();
+        uniforms.u_frame.value += 1.0;
+        renderer.render(scene, camera);
+      }
+
+      /*
+      * Updates the renderer size, the camera aspect ratio and the uniforms when the window is resized
+      */
+      function onWindowResize(event) {
+        // Update the renderer
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        // Update the camera
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        // Update the resolution uniform
+        uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight).multiplyScalar(window.devicePixelRatio);
+      }
+    }
+  </script>
 
 </body>
+
 </html>
